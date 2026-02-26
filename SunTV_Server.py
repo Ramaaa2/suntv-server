@@ -1,53 +1,59 @@
 import os
 import threading
-import requests
+import yt_dlp
 from flask import Flask, Response, stream_with_context
+import requests
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
 # CONFIGURACIÓN
 TOKEN = '8756442233:AAGiQseBVPNjv9qTJyBQVdmAQZVYG8gf870'
+URL_RENDER = "https://suntv-servertv.onrender.com"
 app = Flask(__name__)
 
-# Página de inicio para evitar el 404
-@app.route('/')
-def home():
-    return "✅ Servidor de SunTV funcionando correctamente"
+# FUNCIÓN PRO: Extrae el link directo saltando anuncios
+def extraer_link_pro(url_web):
+    ydl_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'format': 'best',
+        'noplaylist': True,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        try:
+            info = ydl.extract_info(url_web, download=False)
+            # Retorna el link directo del servidor de video (fembed, gounlimited, etc)
+            return info.get('url', None)
+        except Exception:
+            return None
 
-# EL BOT: Genera el link para tu app
-async def generar_enlace(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.video:
-        file_id = update.message.video.file_id
-        url_render = "https://suntv-servertv.onrender.com" 
-        link_directo = f"{url_render}/video/{file_id}"
-        await update.message.reply_text(f"✅ Link para nPoint:\n\n{link_directo}")
-
-# EL PUENTE: Envía el video de Telegram a la TV
-@app.route('/video/<file_id>')
-def stream_video(file_id):
-    try:
-        url_telegram = f"https://api.telegram.org/bot{TOKEN}/getFile?file_id={file_id}"
-        datos = requests.get(url_telegram).json()
-        ruta_archivo = datos['result']['file_path']
-        video_url = f"https://api.telegram.org/file/bot{TOKEN}/{ruta_archivo}"
+async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url_usuario = update.message.text
+    
+    if "http" in url_usuario:
+        await update.message.reply_text("🕵️‍♂️ Analizando link y saltando protecciones...")
         
-        def generate():
-            with requests.get(video_url, stream=True) as r:
-                for chunk in r.iter_content(chunk_size=1024*512):
-                    yield chunk
-        return Response(stream_with_context(generate()), content_type='video/mp4')
-    except Exception as e:
-        return f"Error: {str(e)}", 500
+        link_directo = extraer_link_pro(url_usuario)
+        
+        if link_directo:
+            # Creamos el link disfrazado para la app
+            link_final = f"{URL_RENDER}/video_proxy?url={link_directo}"
+            await update.message.reply_text(f"✅ ¡Éxito! Video extraído.\n\nLink para nPoint:\n`{link_final}`")
+        else:
+            await update.message.reply_text("❌ No pude extraer el video. El sitio tiene una protección muy fuerte.")
 
-def run_flask():
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+# PROXY DE VIDEO: Hace que el video fluya a la TV sin bloqueos
+@app.route('/video_proxy')
+def video_proxy():
+    video_url = request.args.get('url')
+    def generate():
+        with requests.get(video_url, stream=True) as r:
+            for chunk in r.iter_content(chunk_size=1024*1024): # Chunks de 1MB
+                yield chunk
+    return Response(stream_with_context(generate()), content_type='video/mp4')
 
-if __name__ == '__main__':
-    threading.Thread(target=run_flask).start()
-    application = ApplicationBuilder().token(TOKEN).build()
-    application.add_handler(MessageHandler(filters.VIDEO, generar_enlace))
-    application.run_polling()
+# ... (El resto del código de Flask y Run que ya tienes)
+
 
 
 
