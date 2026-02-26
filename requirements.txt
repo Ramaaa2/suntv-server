@@ -1,5 +1,6 @@
 python-telegram-bot
 flask
-gunicorn
 requests
+beautifulsoup4
 yt-dlp
+gunicorn
