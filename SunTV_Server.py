@@ -7,25 +7,34 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 
 TOKEN = "8756442233:AAGiQseBVPNjv9qTJyBQVdmAQZVYG8gf870"
-API_KEY = "f09d3949989a5e5812e964098939c381"
+# Tu clave personal de TMDB insertada aquí:
+API_KEY = "f89f1b10ba76c14e544f07a1473f7d08"
 
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "✅ SunTV Bot activo y corriendo"
+    return "✅ Motor SunTV API Activo"
 
 async def recolectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("COMANDO RECIBIDO: /recolectar")  # Para ver en los logs de Render
-    await update.message.reply_text("⏳ Generando catálogo de películas desde la API...")
+    print("COMANDO RECIBIDO: /recolectar")
+    await update.message.reply_text("⏳ Generando catálogo de películas desde tu API personal...")
 
     try:
         url = f"https://api.themoviedb.org/3/movie/popular?api_key={API_KEY}&language=es-MX&page=1"
-        data = requests.get(url).json()
+        respuesta = requests.get(url)
+        data = respuesta.json()
+
+        # Verificamos si la API nos dio acceso correctamente
+        if "results" not in data:
+            mensaje_error = data.get("status_message", "Error desconocido en la API.")
+            await update.message.reply_text(f"⚠️ Error de TMDB:\n{mensaje_error}")
+            return
 
         peliculas = []
 
-        for peli in data.get("results", []):
+        # Recolectamos las películas
+        for peli in data["results"]:
             peliculas.append({
                 "titulo": peli["title"],
                 "urlPortada": f"https://image.tmdb.org/t/p/w500{peli['poster_path']}",
@@ -34,35 +43,33 @@ async def recolectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "categoria": "Tendencias"
             })
 
-        # Guardamos el archivo
+        # Guardamos el JSON localmente
         with open("lista_suntv.json", "w", encoding="utf-8") as f:
             json.dump(peliculas, f, indent=2, ensure_ascii=False)
 
-        # Enviamos el archivo asegurándonos de abrirlo y cerrarlo correctamente
+        # Te enviamos el documento por Telegram
         with open("lista_suntv.json", "rb") as doc:
             await update.message.reply_document(
                 document=doc, 
-                caption="✅ ¡Catálogo SunTV listo!\nCopia el contenido en tu nPoint."
+                caption=f"✅ ¡Catálogo SunTV listo!\nSe encontraron {len(peliculas)} películas en alta calidad."
             )
             
     except Exception as e:
         print(f"Error en la recolección: {e}")
-        await update.message.reply_text("❌ Hubo un error técnico al conectarse a la API.")
+        await update.message.reply_text("❌ Hubo un error técnico al conectarse a la base de datos.")
 
-# Movemos Flask al hilo secundario
 def run_flask():
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, use_reloader=False)
 
 if __name__ == "__main__":
-    # 1. Arrancamos Flask en el fondo para que Render reconozca el puerto web
     threading.Thread(target=run_flask).start()
     
-    # 2. Arrancamos el Bot en el hilo principal (Soluciona el error de asincronía)
     print("Iniciando Bot de Telegram...")
     app_bot = ApplicationBuilder().token(TOKEN).build()
     app_bot.add_handler(CommandHandler("recolectar", recolectar))
     app_bot.run_polling()
+
 
 
 
