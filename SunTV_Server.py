@@ -1,34 +1,73 @@
 import requests
 from bs4 import BeautifulSoup
+import json
 
-def buscar_peliculas_archive():
-    # Buscamos en Archive.org películas con audio latino
-    url_busqueda = "https://archive.org/advancedsearch.php?q=subject%3A%22peliculas+latino%22+AND+format%3A%22MPEG4%22&fl[]=identifier,title&output=json"
+# CONFIGURACIÓN
+NPOINT_ID = "tu_id_de_npoint" # El código final de tu URL de nPoint
+API_TMDB = "tu_api_key_de_tmdb"
+
+def obtener_json_actual():
+    try:
+        res = requests.get(f"https://api.npoint.io/{NPOINT_ID}")
+        return res.json()
+    except:
+        return []
+
+def buscar_nuevas_peliculas(cantidad=30, omitir_titulos=[]):
+    # Buscamos archivos mp4 en Archive.org con temática de películas
+    query = "subject:(feature movies) AND format:(MPEG4)"
+    url = f"https://archive.org/advancedsearch.php?q={query}&fl[]=identifier,title&rows=100&page=1&output=json"
     
-    response = requests.get(url_busqueda).json()
+    response = requests.get(url).json()
     items = response['response']['docs']
     
-    nueva_lista = []
-    
-    for item in items[:20]: # Traemos las últimas 20 encontradas
-        id_item = item['identifier']
-        titulo = item['title']
+    nuevas = []
+    for item in items:
+        if len(nuevas) >= cantidad:
+            break
+            
+        titulo_sucio = item['title']
+        # Evitamos repetir si ya existe en el JSON
+        if titulo_sucio in omitir_titulos:
+            continue
+            
+        identificador = item['identifier']
+        link_video = f"https://archive.org/download/{identificador}/{identificador}.mp4"
         
-        # El link directo en Archive.org suele seguir este patrón:
-        link_directo = f"https://archive.org/download/{id_item}/{id_item}.mp4"
+        # Intentamos obtener portada de TMDB (Opcional)
+        portada = "https://via.placeholder.com/500x750.png?text=SunTV+Movie"
         
-        # Aquí podrías usar tu lógica de TMDB para sacar la portada
-        portada = "https://via.placeholder.com/500x750?text=SunTV" 
-        
-        nueva_lista.append({
-            "titulo": titulo,
+        nuevas.append({
+            "titulo": titulo_sucio,
             "urlPortada": portada,
-            "urlVideo": link_directo,
+            "urlVideo": link_video,
             "calidad": "HD",
             "categoria": "Peliculas"
         })
+    return nuevas
+
+def actualizar_catalogo():
+    # 1. Bajamos lo que ya tenemos
+    lista_vieja = obtener_json_actual()
+    titulos_existentes = [p['titulo'] for p in lista_vieja]
     
-    return nueva_lista
+    # 2. Buscamos 30 que no tengamos
+    nuevas_pelis = buscar_nuevas_peliculas(30, titulos_existentes)
+    
+    if nuevas_pelis:
+        # 3. Sumamos las nuevas a las viejas
+        lista_final = lista_vieja + nuevas_pelis
+        
+        # 4. Subimos de nuevo a nPoint
+        res = requests.post(
+            f"https://api.npoint.io/{NPOINT_ID}",
+            json=lista_final
+        )
+        return f"Éxito: Se agregaron {len(nuevas_pelis)} películas nuevas."
+    else:
+        return "No se encontraron películas nuevas para agregar."
+
+# Esto lo podés llamar desde una ruta de Flask en Render
 
 
 
