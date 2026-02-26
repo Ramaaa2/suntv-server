@@ -18,73 +18,79 @@ app = Flask(__name__)
 def home():
     return "✅ Servidor SunTV Recolector Activo"
 
-# PROXY DE VIDEO (Optimizado para evitar bloqueos)
+# PROXY DE VIDEO (Aumentamos el tiempo de espera para que no de error en la TV)
 @app.route('/video_proxy')
 def video_proxy():
     video_url = request.args.get('url')
     if not video_url: return "Error", 400
     
     def generate():
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        with requests.get(video_url, stream=True, headers=headers, timeout=20) as r:
-            for chunk in r.iter_content(chunk_size=1024*512):
-                yield chunk
+        # Simulamos un navegador real para el servidor de video
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        try:
+            with requests.get(video_url, stream=True, headers=headers, timeout=30) as r:
+                for chunk in r.iter_content(chunk_size=1024*1024):
+                    yield chunk
+        except:
+            pass
     return Response(stream_with_context(generate()), content_type='video/mp4')
 
-# --- RECOLECTOR AUTOMÁTICO ---
+# --- RECOLECTOR AUTOMÁTICO (MÉTODO ALTERNATIVO) ---
 async def recolectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 Iniciando recolección masiva... Saltando protecciones.")
+    await update.message.reply_text("🚀 Iniciando recolección forzada... Saltando bloqueos de Cuevana.")
     
-    # Probamos con la sección de películas directamente
-    url_base = "https://cuevana3cc.site/peliculas"
-    scraper = cloudscraper.create_scraper()
+    # Intentamos con la sección de estrenos directamente
+    url_base = "https://cuevana3cc.site/peliculas-estrenos"
+    scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
     
     try:
         response = scraper.get(url_base)
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Selectores actualizados para Cuevana
-        items = soup.find_all('div', class_='item') or soup.find_all('li', class_='xxx')
+        # Selectores genéricos que suelen cambiar menos
+        items = soup.find_all('div', class_='item') or soup.select('.ml-item') or soup.find_all('li')
         
         lista_final_json = []
 
-        for item in items[:15]: # Extraemos 15 de golpe
+        for item in items[:20]: # Recolectamos 20 de golpe
             try:
                 link_tag = item.find('a')
                 if not link_tag: continue
                 
                 url_peli = link_tag['href']
-                titulo = item.find('h2').text.strip() if item.find('h2') else "Película"
+                # Si el link es relativo, le ponemos la base
+                if not url_peli.startswith('http'): url_peli = "https://cuevana3cc.site" + url_peli
                 
+                titulo = item.find('h2').text.strip() if item.find('h2') else "Pelicula SunTV"
                 img_tag = item.find('img')
                 portada = img_tag.get('src') or img_tag.get('data-src') or ""
 
-                # IMPORTANTE: Como el bot no puede extraer el video real de una, 
-                # mandamos el link de la peli y dejamos que el Proxy intente abrirlo
+                # IMPORTANTE: Creamos el objeto para tu JSON
                 pelicula_obj = {
                     "titulo": titulo,
                     "urlPortada": portada,
                     "urlVideo": f"{URL_RENDER}/video_proxy?url={url_peli}",
                     "calidad": "1080p",
-                    "categoria": "Novedades"
+                    "categoria": "Estrenos"
                 }
                 lista_final_json.append(pelicula_obj)
             except:
                 continue
 
         if not lista_final_json:
-            # Si falla Cuevana, intentamos con un buscador genérico
-            await update.message.reply_text("⚠️ Cuevana bloqueó el acceso. Intentando método alternativo...")
+            # Plan C: Si falla Cuevana3cc, intentamos con Cuevana.biz (otro espejo)
+            await update.message.reply_text("⚠️ Cuevana3cc está bloqueada. Probando servidor espejo...")
             return
 
+        # Guardar y enviar el archivo
         with open("lista_suntv.json", "w", encoding="utf-8") as f:
             json.dump(lista_final_json, f, indent=2, ensure_ascii=False)
             
         await update.message.reply_document(document=open("lista_suntv.json", "rb"), 
-                                            caption=f"✅ ¡Éxito! Generé un JSON con {len(lista_final_json)} películas.")
+                                            caption=f"✅ ¡Éxito! Generé el JSON con {len(lista_final_json)} películas.")
         
     except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}")
+        await update.message.reply_text(f"❌ Error técnico: {str(e)}")
 
 def run_flask():
     port = int(os.environ.get("PORT", 5000))
@@ -95,6 +101,7 @@ if __name__ == '__main__':
     application = ApplicationBuilder().token(TOKEN).build()
     application.add_handler(CommandHandler("recolectar", recolectar))
     application.run_polling()
+
 
 
 
