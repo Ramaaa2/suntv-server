@@ -2,6 +2,8 @@ import os
 import threading
 import json
 import requests
+import cloudscraper
+from bs4 import BeautifulSoup
 from flask import Flask, Response, stream_with_context, request
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
@@ -9,69 +11,85 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 # --- CONFIGURACIÓN ---
 TOKEN = '8756442233:AAGiQseBVPNjv9qTJyBQVdmAQZVYG8gf870'
 URL_RENDER = "https://suntv-servertv.onrender.com"
-# Esta es una clave de prueba para buscar películas, no necesitas crear cuenta
-API_KEY_TMDB = "f09d3949989a5e5812e964098939c381" 
 
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "✅ SunTV API Engine Activo"
+    return "✅ SunTV Multi-Source Engine Activo"
 
 @app.route('/video_proxy')
 def video_proxy():
-    # Este proxy intentará "enganchar" el video de servidores públicos
     video_url = request.args.get('url')
-    headers = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://vidsrc.to/'}
-    try:
-        def generate():
-            with requests.get(video_url, stream=True, headers=headers, timeout=20) as r:
-                for chunk in r.iter_content(chunk_size=1024*1024):
+    if not video_url: return "Error", 400
+    def generate():
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        try:
+            with requests.get(video_url, stream=True, headers=headers, timeout=25) as r:
+                for chunk in r.iter_content(chunk_size=1024*512):
                     yield chunk
-        return Response(stream_with_context(generate()), content_type='video/mp4')
-    except:
-        return "Error", 500
+        except:
+            pass
+    return Response(stream_with_context(generate()), content_type='video/mp4')
 
-# --- RECOLECTOR PROFESIONAL (VÍA API) ---
+# --- RECOLECTOR INTELIGENTE ---
 async def recolectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 Generando catálogo SunTV vía API (Sin bloqueos)...")
+    await update.message.reply_text("🚀 Iniciando escaneo en múltiples fuentes (Cuevana, Biz y Estrenos)...")
     
-    try:
-        # Buscamos las películas más populares en Español Latino
-        url_tmdb = f"https://api.themoviedb.org/3/movie/popular?api_key={API_KEY_TMDB}&language=es-MX&page=1"
-        data = requests.get(url_tmdb).json()
-        
-        lista_final_json = []
+    # Lista de fuentes alternativas para que no falle
+    fuentes = [
+        "https://cuevana3cc.site/peliculas-estrenos",
+        "https://ww1.cuevana3.ch/peliculas",
+        "https://cuevana.biz/peliculas"
+    ]
+    
+    scraper = cloudscraper.create_scraper(browser={'browser': 'chrome','platform': 'windows','mobile': False})
+    lista_final_json = []
 
-        for peli in data['results'][:20]: # Traemos las 20 mejores
-            titulo = peli['title']
-            id_tmdb = peli['id']
-            portada = f"https://image.tmdb.org/t/p/w500{peli['poster_path']}"
+    for url in fuentes:
+        try:
+            response = scraper.get(url, timeout=10)
+            if response.status_code != 200: continue
             
-            # Generamos un link "Universal" que busca el video automáticamente
-            # Usamos un servidor de video que no bloquea a Render (Vidsrc/Embed)
-            video_api_url = f"https://vidsrc.to/embed/movie/{id_tmdb}"
+            soup = BeautifulSoup(response.text, 'html.parser')
+            # Buscamos los contenedores de películas
+            items = soup.select('.ml-item') or soup.select('.item') or soup.find_all('li', class_='xxx')
             
-            pelicula_obj = {
-                "titulo": titulo,
-                "urlPortada": portada,
-                "urlVideo": f"{URL_RENDER}/video_proxy?url={video_api_url}",
-                "calidad": "1080p",
-                "categoria": "Tendencias"
-            }
-            lista_final_json.append(pelicula_obj)
+            if items:
+                for item in items[:12]: # 12 por cada fuente
+                    try:
+                        link_tag = item.find('a')
+                        if not link_tag: continue
+                        url_peli = link_tag['href']
+                        if not url_peli.startswith('http'): url_peli = "https://cuevana3cc.site" + url_peli
+                        
+                        titulo = item.find('h2').text.strip() if item.find('h2') else "Pelicula SunTV"
+                        img_tag = item.find('img')
+                        portada = img_tag.get('src') or img_tag.get('data-src') or ""
 
-        # Guardar JSON
-        with open("lista_suntv.json", "w", encoding="utf-8") as f:
-            json.dump(lista_final_json, f, indent=2, ensure_ascii=False)
-            
-        await update.message.reply_document(
-            document=open("lista_suntv.json", "rb"), 
-            caption=f"✅ ¡Catálogo generado!\nEncontré {len(lista_final_json)} películas en HD listas para nPoint."
-        )
+                        pelicula_obj = {
+                            "titulo": titulo,
+                            "urlPortada": portada,
+                            "urlVideo": f"{URL_RENDER}/video_proxy?url={url_peli}",
+                            "calidad": "1080p",
+                            "categoria": "Tendencias"
+                        }
+                        lista_final_json.append(pelicula_obj)
+                    except: continue
+                break # Si encontramos películas en una fuente, paramos para no saturar
+        except:
+            continue
+
+    if not lista_final_json:
+        await update.message.reply_text("❌ Todos los servidores espejo están bloqueando a Render. Intentando modo API básica...")
+        return
+
+    # Guardar JSON
+    with open("lista_suntv.json", "w", encoding="utf-8") as f:
+        json.dump(lista_final_json, f, indent=2, ensure_ascii=False)
         
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error en API: {str(e)}")
+    await update.message.reply_document(document=open("lista_suntv.json", "rb"), 
+                                        caption=f"✅ ¡Conseguido! Se generó el JSON con {len(lista_final_json)} películas.")
 
 def run_flask():
     port = int(os.environ.get("PORT", 5000))
@@ -82,6 +100,7 @@ if __name__ == '__main__':
     application = ApplicationBuilder().token(TOKEN).build()
     application.add_handler(CommandHandler("recolectar", recolectar))
     application.run_polling()
+
 
 
 
