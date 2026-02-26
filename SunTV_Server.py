@@ -38,7 +38,7 @@ async def recolectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             peliculas.append({
                 "titulo": peli["title"],
                 "urlPortada": f"https://image.tmdb.org/t/p/w500{peli['poster_path']}",
-                "urlVideo": f"https://embed.su/embed/movie/{peli['id']}",
+                "urlVideo": f"https://autoembed.to/movie/tmdb/{peli['id']}",
                 "calidad": "1080p",
                 "categoria": "Tendencias"
             })
@@ -69,6 +69,7 @@ if __name__ == "__main__":
     app_bot = ApplicationBuilder().token(TOKEN).build()
     app_bot.add_handler(CommandHandler("recolectar", recolectar))
     app_bot.run_polling()
+
 
 
 
