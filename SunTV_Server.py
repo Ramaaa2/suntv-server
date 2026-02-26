@@ -6,8 +6,8 @@ from flask import Flask
 from threading import Thread
 
 # --- CONFIGURACIÓN ---
-TOKEN = "8756442233:AAGiQseBVPNjv9qTJyBQVdmAQZVYG8gf870"
-NPOINT_ID = "35fca43f0d7e65606300"
+TOKEN = "TU_TOKEN_DE_TELEGRAM_AQUI"
+NPOINT_ID = "f3098e77b66eb5a7d32c"
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
@@ -24,9 +24,8 @@ def limpiar_titulo(texto):
 
 @bot.message_handler(commands=['actualizar'])
 def actualizar_peliculas(message):
-    bot.reply_to(message, "🚀 Iniciando búsqueda masiva en Latino... Dame un momento.")
+    bot.reply_to(message, "🚀 Buscando películas en Latino y generando JSON...")
     
-    # Intentamos bajar lo que ya hay para no repetir
     try:
         lista_actual = requests.get(f"https://api.npoint.io/{NPOINT_ID}").json()
         if not isinstance(lista_actual, list): lista_actual = []
@@ -35,20 +34,20 @@ def actualizar_peliculas(message):
     
     titulos_viejos = [p['titulo'].lower() for p in lista_actual]
     
-    # Aumentamos el rango de búsqueda (pedimos 300 resultados para filtrar los mejores 50)
+    # Búsqueda ampliada en Archive.org
     query = 'subject:"peliculas latino" AND format:MPEG4'
-    url_search = f"https://archive.org/advancedsearch.php?q={query}&fl[]=identifier,title&rows=300&page=1&output=json"
+    url_search = f"https://archive.org/advancedsearch.php?q={query}&fl[]=identifier,title&rows=200&page=1&output=json"
     
     try:
         data = requests.get(url_search).json()
         items = data['response']['docs']
     except:
-        bot.reply_to(message, "❌ Error de conexión con el servidor de películas.")
+        bot.reply_to(message, "❌ Error de conexión.")
         return
 
     nuevas_encontradas = []
     for item in items:
-        if len(nuevas_encontradas) >= 50: break # BUSCAMOS 50 ESTA VEZ
+        if len(nuevas_encontradas) >= 40: break # Intentamos traer 40
         
         titulo_raw = item['title']
         identificador = item['identifier']
@@ -67,22 +66,26 @@ def actualizar_peliculas(message):
             titulos_viejos.append(titulo_limpio.lower())
 
     if nuevas_encontradas:
-        # 1. Actualizamos nPoint
+        # Actualizar nPoint automáticamente
         requests.post(f"https://api.npoint.io/{NPOINT_ID}", json=lista_actual)
         
-        # 2. Creamos un archivo JSON para enviarte al chat
-        json_string = json.dumps(lista_actual, indent=4, ensure_ascii=False)
-        json_file = io.BytesIO(json_string.encode())
-        json_file.name = "suntv_catalogo.json"
+        # Convertir a texto JSON
+        json_bonito = json.dumps(lista_actual, indent=2, ensure_ascii=False)
         
-        bot.send_document(message.chat.id, json_file, caption=f"✅ ¡Éxito! Encontré {len(nuevas_encontradas)} pelis nuevas.\nTotal: {len(lista_actual)} ítems.")
+        # SI ES CORTO: Mandar como texto de código
+        if len(json_bonito) < 4000:
+            bot.send_message(message.chat.id, f"✅ ¡Nuevas pelis sumadas!\n\n```json\n{json_bonito}\n```", parse_mode="Markdown")
+        else:
+            # SI ES LARGO: Mandar como archivo para que no se corte
+            json_file = io.BytesIO(json_bonito.encode())
+            json_file.name = "catalogo_suntv.json"
+            bot.send_document(message.chat.id, json_file, caption=f"✅ Catálogo actualizado con {len(nuevas_encontradas)} pelis nuevas.")
     else:
-        bot.reply_to(message, "⚠️ No encontré películas nuevas en Latino que no estuvieran ya en tu lista.")
+        bot.reply_to(message, "⚠️ No hay películas nuevas para agregar por ahora.")
 
 if __name__ == "__main__":
     Thread(target=run_flask).start()
     bot.infinity_polling()
-
 
 
 
