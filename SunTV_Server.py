@@ -6,7 +6,7 @@ from threading import Thread
 
 # --- CONFIGURACIÓN ---
 TOKEN = "8756442233:AAGiQseBVPNjv9qTJyBQVdmAQZVYG8gf870"
-NPOINT_ID = "f3098e77b66eb5a7d32c"
+NPOINT_ID = "35fca43f0d7e65606300"
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
@@ -88,6 +88,7 @@ if __name__ == "__main__":
     # Iniciamos el Bot de Telegram
     print("Bot SunTV iniciado...")
     bot.infinity_polling()
+
 
 
 
