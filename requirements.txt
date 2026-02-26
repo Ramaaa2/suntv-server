@@ -1,8 +1,3 @@
-python-telegram-bot
 flask
 requests
-beautifulsoup4
-yt-dlp
-cloudscraper
-gunicorn
-lxml
+python-telegram-bot==20.7
