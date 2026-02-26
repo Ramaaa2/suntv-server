@@ -1,73 +1,63 @@
 import os
-import yt_dlp
 import requests
-from flask import Flask, Response, stream_with_context, request
+import json
+from bs4 import BeautifulSoup
+import yt_dlp
 from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
+from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 
-# CONFIGURACIÓN
-TOKEN = '8756442233:AAGiQseBVPNjv9qTJyBQVdmAQZVYG8gf870'
-URL_RENDER = "https://suntv-servertv.onrender.com"
-app = Flask(__name__)
+# ... (Configuración de TOKEN y URL_RENDER igual que antes)
 
-def obtener_video_alta_calidad(url_cuevana):
-    # Configuramos el extractor para buscar específicamente 1080p o superior
-    ydl_opts = {
-        'quiet': True,
-        'no_warnings': True,
-        'format': 'bestvideo[height>=1080][ext=mp4]+bestaudio[ext=m4a]/best[height>=1080]/best',
-    }
+async def recolectar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🕵️‍♂️ Iniciando barrido en Cuevana... Buscando solo 1080p. Esto tomará un momento.")
     
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        try:
-            info = ydl.extract_info(url_cuevana, download=False)
-            ancho = info.get('width', 0)
-            alto = info.get('height', 0)
-            url_directa = info.get('url', None)
-
-            # FILTRO: Si la altura es menor a 1080, lo rechazamos
-            if alto >= 1080:
-                return {
-                    "url": url_directa,
-                    "resolucion": f"{ancho}x{alto}",
-                    "calidad": "Full HD 1080p"
-                }
-            else:
-                return None # Calidad insuficiente
-        except:
-            return None
-
-async def manejar_mensaje(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url_usuario = update.message.text
-    if "http" in url_usuario:
-        await update.message.reply_text("🧐 Analizando calidad del video... buscando 1080p.")
+    url_base = "https://cuevana3cc.site/"
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    
+    try:
+        response = requests.get(url_base, headers=headers)
+        soup = BeautifulSoup(response.text, 'html.parser')
         
-        resultado = obtener_video_alta_calidad(url_usuario)
+        # Buscamos los links de las películas en la portada
+        peliculas_encontradas = []
+        # Este selector depende de la estructura de la web
+        items = soup.find_all('li', class_='xxx') # Ajustar según la clase real de la web
         
-        if resultado:
-            link_final = f"{URL_RENDER}/video_proxy?url={resultado['url']}"
-            mensaje = (
-                f"✅ **¡CALIDAD VERIFICADA!**\n"
-                f"📺 Resolución: {resultado['resolucion']}\n"
-                f"✨ Etiqueta: {resultado['calidad']}\n\n"
-                f"Link para nPoint:\n`{link_final}`"
-            )
-            await update.message.reply_text(mensaje, parse_mode='Markdown')
-        else:
-            await update.message.reply_text("❌ Calidad insuficiente. Este link no llega a 1080p y fue descartado para SunTV.")
+        lista_final_json = []
 
-# PROXY DE VIDEO (Para que fluya sin cortes en la TV)
-@app.route('/video_proxy')
-def video_proxy():
-    video_url = request.args.get('url')
-    def generate():
-        # Aumentamos el tamaño del chunk para videos pesados de 1080p
-        with requests.get(video_url, stream=True) as r:
-            for chunk in r.iter_content(chunk_size=1024*1024): # 1MB por chunk
-                yield chunk
-    return Response(stream_with_context(generate()), content_type='video/mp4')
+        for item in items[:15]: # Analizamos las últimas 15 para que sea rápido
+            link_peli = item.find('a')['href']
+            titulo = item.find('h2').text
+            portada = item.find('img')['src']
+            
+            # El bot entra a la peli a verificar calidad
+            with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+                info = ydl.extract_info(link_peli, download=False)
+                if info.get('height', 0) >= 1080:
+                    video_url = info.get('url')
+                    # Armamos el bloque para tu app
+                    pelicula_obj = {
+                        "titulo": titulo,
+                        "urlPortada": portada,
+                        "urlVideo": f"{URL_RENDER}/video_proxy?url={video_url}",
+                        "calidad": "1080p",
+                        "categoria": "Novedades"
+                    }
+                    lista_final_json.append(pelicula_obj)
 
-# ... (El resto del código de ejecución igual que antes)
+        # Convertimos todo a texto JSON
+        resultado_json = json.dumps(lista_final_json, indent=2, ensure_ascii=False)
+        
+        # Si el texto es muy largo, lo mandamos como archivo
+        with open("lista_suntv.json", "w", encoding="utf-8") as f:
+            f.write(resultado_json)
+            
+        await update.message.reply_document(document=open("lista_suntv.json", "rb"), caption="✅ ¡Lista terminada! Acá tenés el JSON con puras pelis 1080p.")
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error en el barrido: {str(e)}")
+
+# ... (Resto del código)
 
 
 
