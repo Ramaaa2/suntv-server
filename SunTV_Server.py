@@ -14,7 +14,7 @@ async def generar_enlace(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.video:
         file_id = update.message.video.file_id
         # Reemplaza esto con la URL exacta que te dé Render (ej: https://suntv-bot.onrender.com)
-        url_render = "https://suntv-server.onrender.com" 
+        url_render = "https://suntv-servertv.onrender.com" 
         link_directo = f"{url_render}/video/{file_id}"
         await update.message.reply_text(f"✅ Link Directo para SunTV:\n\n{link_directo}")
 
@@ -52,4 +52,5 @@ if __name__ == '__main__':
     application = ApplicationBuilder().token(TOKEN).build()
     application.add_handler(MessageHandler(filters.VIDEO, generar_enlace))
     application.run_polling()
+
 
