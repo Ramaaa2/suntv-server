@@ -1,71 +1,84 @@
+import telebot
 import requests
 import json
 
-# CONFIGURACIÓN - REEMPLAZA CON TUS DATOS
-NPOINT_ID = "https://api.npoint.io/f3098e77b66eb5a7d32c" 
+# --- CONFIGURACIÓN ---
+TOKEN = "8756442233:AAGiQseBVPNjv9qTJyBQVdmAQZVYG8gf870"
+NPOINT_ID = "https://api.npoint.io/f3098e77b66eb5a7d32c"
+bot = telebot.TeleBot(TOKEN)
 
+# Función para limpiar los nombres de los archivos
 def limpiar_titulo(texto):
-    # Elimina extensiones y puntos para que se vea bien en la TV
     limpio = texto.replace(".mp4", "").replace(".mkv", "").replace(".", " ").replace("_", " ")
-    # Quita palabras típicas de servidores piratas
-    for palabra in ["720p", "1080p", "Dual", "Latino", "cinecalidad", "h264"]:
+    for palabra in ["720p", "1080p", "Dual", "Latino", "cinecalidad", "h264", "x264", "unrated"]:
         limpio = limpio.replace(palabra, "")
+        limpio = limpio.replace(palabra.upper(), "")
     return limpio.strip().capitalize()
 
-def actualizar_catalogo_latino():
-    # 1. Obtener lo que ya tenemos en nPoint para no repetir
+# Función para obtener lo que ya hay en nPoint
+def obtener_catalogo():
     try:
-        url_npoint = f"https://api.npoint.io/{NPOINT_ID}"
-        lista_actual = requests.get(url_npoint).json()
-        if not isinstance(lista_actual, list): lista_actual = []
+        res = requests.get(f"https://api.npoint.io/{NPOINT_ID}")
+        data = res.json()
+        return data if isinstance(data, list) else []
     except:
-        lista_actual = []
+        return []
 
+# --- COMANDO PRINCIPAL ---
+@bot.message_handler(commands=['actualizar'])
+def actualizar_peliculas(message):
+    bot.reply_to(message, "🔍 Buscando 30 películas nuevas en Latino... Espere un momento.")
+    
+    # 1. Bajamos la lista actual
+    lista_actual = obtener_catalogo()
     titulos_viejos = [p['titulo'] for p in lista_actual]
 
-    # 2. Buscar en Archive.org (Query específica para Latino)
-    # Buscamos: "peliculas" + "latino" + formato "mp4"
+    # 2. Buscamos en Archive.org (Contenido en Latino)
     query = 'subject:"peliculas latino" AND format:MPEG4'
-    search_url = f"https://archive.org/advancedsearch.php?q={query}&fl[]=identifier,title&rows=100&page=1&output=json"
+    url_search = f"https://archive.org/advancedsearch.php?q={query}&fl[]=identifier,title&rows=100&page=1&output=json"
     
     try:
-        data = requests.get(search_url).json()
+        data = requests.get(url_search).json()
         items = data['response']['docs']
     except:
-        return "Error al conectar con el servidor de búsqueda."
+        bot.reply_to(message, "❌ Error al conectar con Archive.org")
+        return
 
-    nuevas_agregadas = 0
+    agregadas = 0
     for item in items:
-        if nuevas_agregadas >= 30: break # Límite de 30 por búsqueda
-
-        titulo_original = item['title']
-        identificador = item['identifier']
+        if agregadas >= 30: break
         
-        # Si ya la tenemos, la saltamos
-        if titulo_original in titulos_viejos:
-            continue
+        titulo_raw = item['title']
+        id_item = item['identifier']
+        titulo_limpio = limpiar_titulo(titulo_raw)
 
-        # Construir link directo (Archive.org standard)
-        url_video = f"https://archive.org/download/{identificador}/{identificador}.mp4"
-        
-        # Intentar buscar una portada (Por ahora genérica, luego podemos usar TMDB)
-        portada = f"https://via.placeholder.com/500x750.png?text={identificador}"
+        # Solo agregamos si el título no existe ya
+        if titulo_limpio not in titulos_viejos:
+            url_video = f"https://archive.org/download/{id_item}/{id_item}.mp4"
+            # Portada temporal (luego le ponemos la de TMDB)
+            portada = "https://via.placeholder.com/500x750.png?text=Pelicula+Latina"
+            
+            lista_actual.append({
+                "titulo": titulo_limpio,
+                "urlPortada": portada,
+                "urlVideo": url_video,
+                "calidad": "HD",
+                "categoria": "Peliculas"
+            })
+            titulos_viejos.append(titulo_limpio)
+            agregadas += 1
 
-        lista_actual.append({
-            "titulo": limpiar_titulo(titulo_original),
-            "urlPortada": portada,
-            "urlVideo": url_video,
-            "calidad": "HD",
-            "categoria": "Peliculas"
-        })
-        nuevas_agregadas += 1
-
-    # 3. Subir la lista crecida a nPoint
-    if nuevas_agregadas > 0:
-        requests.post(url_npoint, json=lista_actual)
-        return f"¡Éxito! Se sumaron {nuevas_agregadas} películas en latino. Total en catálogo: {len(lista_actual)}"
+    # 3. Guardamos en nPoint
+    if agregadas > 0:
+        requests.post(f"https://api.npoint.io/{NPOINT_ID}", json=lista_actual)
+        bot.reply_to(message, f"✅ ¡Listo! Se agregaron {agregadas} películas nuevas.\nTotal en SunTV: {len(lista_actual)}")
     else:
-        return "No se encontraron películas nuevas en latino esta vez."
+        bot.reply_to(message, "⚠️ No encontré películas nuevas que no estuvieran ya en la lista.")
+
+# Iniciar el Bot
+print("Bot en marcha...")
+bot.infinity_polling()
+
 
 
 
