@@ -3,8 +3,8 @@ from bs4 import BeautifulSoup
 import json
 
 # CONFIGURACIÓN
-NPOINT_ID = "tu_id_de_npoint" # El código final de tu URL de nPoint
-API_TMDB = "tu_api_key_de_tmdb"
+NPOINT_ID = "https://api.npoint.io/f3098e77b66eb5a7d32c" # El código final de tu URL de nPoint
+API_TMDB = "f89f1b10ba76c14e544f07a1473f7d08"
 
 def obtener_json_actual():
     try:
@@ -68,6 +68,7 @@ def actualizar_catalogo():
         return "No se encontraron películas nuevas para agregar."
 
 # Esto lo podés llamar desde una ruta de Flask en Render
+
 
 
 
