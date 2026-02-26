@@ -1,74 +1,71 @@
 import requests
-from bs4 import BeautifulSoup
 import json
 
-# CONFIGURACIÓN
-NPOINT_ID = "https://api.npoint.io/f3098e77b66eb5a7d32c" # El código final de tu URL de nPoint
-API_TMDB = "f89f1b10ba76c14e544f07a1473f7d08"
+# CONFIGURACIÓN - REEMPLAZA CON TUS DATOS
+NPOINT_ID = "https://api.npoint.io/f3098e77b66eb5a7d32c" 
 
-def obtener_json_actual():
+def limpiar_titulo(texto):
+    # Elimina extensiones y puntos para que se vea bien en la TV
+    limpio = texto.replace(".mp4", "").replace(".mkv", "").replace(".", " ").replace("_", " ")
+    # Quita palabras típicas de servidores piratas
+    for palabra in ["720p", "1080p", "Dual", "Latino", "cinecalidad", "h264"]:
+        limpio = limpio.replace(palabra, "")
+    return limpio.strip().capitalize()
+
+def actualizar_catalogo_latino():
+    # 1. Obtener lo que ya tenemos en nPoint para no repetir
     try:
-        res = requests.get(f"https://api.npoint.io/{NPOINT_ID}")
-        return res.json()
+        url_npoint = f"https://api.npoint.io/{NPOINT_ID}"
+        lista_actual = requests.get(url_npoint).json()
+        if not isinstance(lista_actual, list): lista_actual = []
     except:
-        return []
+        lista_actual = []
 
-def buscar_nuevas_peliculas(cantidad=30, omitir_titulos=[]):
-    # Buscamos archivos mp4 en Archive.org con temática de películas
-    query = "subject:(feature movies) AND format:(MPEG4)"
-    url = f"https://archive.org/advancedsearch.php?q={query}&fl[]=identifier,title&rows=100&page=1&output=json"
+    titulos_viejos = [p['titulo'] for p in lista_actual]
+
+    # 2. Buscar en Archive.org (Query específica para Latino)
+    # Buscamos: "peliculas" + "latino" + formato "mp4"
+    query = 'subject:"peliculas latino" AND format:MPEG4'
+    search_url = f"https://archive.org/advancedsearch.php?q={query}&fl[]=identifier,title&rows=100&page=1&output=json"
     
-    response = requests.get(url).json()
-    items = response['response']['docs']
-    
-    nuevas = []
+    try:
+        data = requests.get(search_url).json()
+        items = data['response']['docs']
+    except:
+        return "Error al conectar con el servidor de búsqueda."
+
+    nuevas_agregadas = 0
     for item in items:
-        if len(nuevas) >= cantidad:
-            break
-            
-        titulo_sucio = item['title']
-        # Evitamos repetir si ya existe en el JSON
-        if titulo_sucio in omitir_titulos:
-            continue
-            
+        if nuevas_agregadas >= 30: break # Límite de 30 por búsqueda
+
+        titulo_original = item['title']
         identificador = item['identifier']
-        link_video = f"https://archive.org/download/{identificador}/{identificador}.mp4"
         
-        # Intentamos obtener portada de TMDB (Opcional)
-        portada = "https://via.placeholder.com/500x750.png?text=SunTV+Movie"
+        # Si ya la tenemos, la saltamos
+        if titulo_original in titulos_viejos:
+            continue
+
+        # Construir link directo (Archive.org standard)
+        url_video = f"https://archive.org/download/{identificador}/{identificador}.mp4"
         
-        nuevas.append({
-            "titulo": titulo_sucio,
+        # Intentar buscar una portada (Por ahora genérica, luego podemos usar TMDB)
+        portada = f"https://via.placeholder.com/500x750.png?text={identificador}"
+
+        lista_actual.append({
+            "titulo": limpiar_titulo(titulo_original),
             "urlPortada": portada,
-            "urlVideo": link_video,
+            "urlVideo": url_video,
             "calidad": "HD",
             "categoria": "Peliculas"
         })
-    return nuevas
+        nuevas_agregadas += 1
 
-def actualizar_catalogo():
-    # 1. Bajamos lo que ya tenemos
-    lista_vieja = obtener_json_actual()
-    titulos_existentes = [p['titulo'] for p in lista_vieja]
-    
-    # 2. Buscamos 30 que no tengamos
-    nuevas_pelis = buscar_nuevas_peliculas(30, titulos_existentes)
-    
-    if nuevas_pelis:
-        # 3. Sumamos las nuevas a las viejas
-        lista_final = lista_vieja + nuevas_pelis
-        
-        # 4. Subimos de nuevo a nPoint
-        res = requests.post(
-            f"https://api.npoint.io/{NPOINT_ID}",
-            json=lista_final
-        )
-        return f"Éxito: Se agregaron {len(nuevas_pelis)} películas nuevas."
+    # 3. Subir la lista crecida a nPoint
+    if nuevas_agregadas > 0:
+        requests.post(url_npoint, json=lista_actual)
+        return f"¡Éxito! Se sumaron {nuevas_agregadas} películas en latino. Total en catálogo: {len(lista_actual)}"
     else:
-        return "No se encontraron películas nuevas para agregar."
-
-# Esto lo podés llamar desde una ruta de Flask en Render
-
+        return "No se encontraron películas nuevas en latino esta vez."
 
 
 
