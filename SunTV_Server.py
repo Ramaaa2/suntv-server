@@ -3,11 +3,11 @@ import requests
 import json
 import io
 import os
-from flask import Flask
+from flask import Flask, redirect  # Se corrigió el import del redirect
 from threading import Thread
 
 # --- CONFIGURACIÓN ---
-# Se recomienda configurar estas variables en el panel de Render (Environment)
+# Estos valores se pueden configurar en Render (Environment) o dejarlos aquí
 TOKEN = os.environ.get("BOT_TOKEN", "8756442233:AAFG959KZpb-JXmtbp3Hhx1PLkLft5jsy2k")
 FIREBASE_URL = os.environ.get("FIREBASE_URL", "https://suntv-app-33e92-default-rtdb.firebaseio.com/").strip("/")
 URL_BASE = os.environ.get("URL", "").strip("/")
@@ -22,13 +22,14 @@ def home():
 # --- FUNCIONES FIREBASE ---
 
 def obtener_catalogo():
+    """Lee la lista actual de Firebase"""
     try:
-        # Agregamos .json al final para la API de Firebase
         headers = {'User-Agent': 'Mozilla/5.0'}
+        # Importante: Firebase requiere el .json al final
         res = requests.get(f"{FIREBASE_URL}/peliculas.json", headers=headers, timeout=10)
         if res.status_code == 200:
             data = res.json()
-            if data is None: return [] # Si la DB está vacía
+            if data is None: return []
             return data if isinstance(data, list) else []
         return []
     except Exception as e:
@@ -36,8 +37,8 @@ def obtener_catalogo():
         return []
 
 def guardar_catalogo(lista):
+    """Sube la lista actualizada a Firebase"""
     try:
-        # Usamos PUT para guardar la lista completa
         res = requests.put(f"{FIREBASE_URL}/peliculas.json", json=lista, timeout=10)
         return res.status_code == 200
     except Exception as e:
@@ -86,7 +87,7 @@ def manejar_archivo(message):
         nueva_peli = {
             "titulo": titulo_limpio,
             "descripcion": "Agregado vía SunTV Bot.",
-            "urlPortada": "https://i.postimg.cc/sgf0p9Lz/Canal-E.png", # Imagen por defecto
+            "urlPortada": "https://i.postimg.cc/sgf0p9Lz/Canal-E.png",
             "urlVideo": direct_url,
             "calidad": "HD",
             "categoria": "Estrenos"
@@ -107,15 +108,16 @@ def manejar_archivo(message):
     except Exception as e:
         bot.edit_message_text(f"❌ Error crítico: {str(e)}", message.chat.id, msg_espera.message_id)
 
-# --- PUENTE DE STREAMING ---
+# --- PUENTE DE STREAMING (CORREGIDO) ---
 @app.route('/watch/<file_id>')
 def stream_video(file_id):
     try:
-        # Obtenemos la ruta real del archivo en los servidores de Telegram
+        # Obtenemos la ruta real del archivo en Telegram
         file_info = bot.get_file(file_id)
-        # Redirigimos al reproductor directamente al archivo de Telegram
-        telegram_download_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_info.file_path}"
-        return requests.utils.redirect(telegram_download_url)
+        # URL oficial de descarga/stream de Telegram
+        telegram_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_info.file_path}"
+        # Redireccionamos el reproductor (ExoPlayer) directamente al archivo
+        return redirect(telegram_url)
     except Exception as e:
         return f"Error de streaming: {str(e)}", 404
 
@@ -124,8 +126,9 @@ def run_flask():
     app.run(host='0.0.0.0', port=port)
 
 if __name__ == "__main__":
-    # Hilo para Flask (Servidor Web)
+    # Iniciar Flask en un hilo separado
     Thread(target=run_flask).start()
-    # Polling para el Bot
+    # Iniciar el bot (Infinity polling para evitar caídas)
     print("Bot SunTV Firebase iniciado...")
     bot.infinity_polling()
+
