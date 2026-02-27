@@ -3,7 +3,7 @@ import requests
 import json
 import io
 import os
-from flask import Flask, redirect, send_file
+from flask import Flask, redirect, Response
 from threading import Thread
 
 # --- CONFIGURACIÓN ---
@@ -28,19 +28,14 @@ def stream_video(file_id):
     except Exception as e:
         return f"Error de streaming: {str(e)}", 404
 
-# --- NUEVA FUNCIÓN: DESCARGAR APK ---
+# --- FUNCIÓN: DESCARGAR APK ---
 @app.route('/descargar')
 def descargar_app():
     """
-    Esta ruta sirve para que pongas el link de tu APK.
-    Puedes subir el APK a MediaFire, GitHub o Drive y pegar el link directo aquí.
+    Redirecciona directamente al link de descarga de tu APK.
+    Cuando actualices la App, solo cambia este link de aquí abajo.
     """
-    # REEMPLAZA ESTE LINK por el link de descarga de tu APK (puedes usar el que te da @DirectLink_Bot para tu APK)
-    LINK_DIRECTO_APK = "https://dl.springsfern.in/dl/AAAAAeJCAwJFEVJMAAAG9A/DwHzpWgQq_qOxXqoVPHqjtoopDU6ozExBRyRZtNzQtU" 
-    
-    if LINK_DIRECTO_APK == "https://dl.springsfern.in/dl/AAAAAeJCAwJFEVJMAAAG9A/DwHzpWgQq_qOxXqoVPHqjtoopDU6ozExBRyRZtNzQtU":
-        return "Error: No has configurado el link del APK en el código.", 400
-        
+    LINK_DIRECTO_APK = "https://dl.springsfern.in/dl/AAAAAeJCAwJFEVJMAAAG9A/DwHzpWgQq_qOxXqoVPHqjtoopDU6ozExBRyRZtNzQtU"
     return redirect(LINK_DIRECTO_APK)
 
 # --- FUNCIONES FIREBASE ---
@@ -70,52 +65,78 @@ def guardar_catalogo(lista):
 
 @bot.message_handler(commands=['start'])
 def enviar_bienvenida(message):
-    bot.reply_to(message, "🎬 **Bienvenido a SunTV Admin**\n\nEnvía videos cortos o links directos de pelis.")
+    bot.reply_to(message, "🎬 **SunTV Admin Bot**\n\n"
+                          "• Para videos cortos (<20MB): Reenvíalos directamente.\n"
+                          "• Para películas o APK: Pega el link directo que te dé el bot de streaming.")
 
+@bot.message_handler(commands=['ver'])
+def ver_json(message):
+    catalogo = obtener_catalogo()
+    json_str = json.dumps(catalogo, indent=2, ensure_ascii=False)
+    bot.send_document(message.chat.id, io.BytesIO(json_str.encode()), visible_file_name="suntv_firebase.json", caption=f"📂 Películas en Firebase: {len(catalogo)}")
+
+# Manejador de Links (Películas grandes o Links externos)
 @bot.message_handler(func=lambda message: message.text and message.text.startswith("http") and not "/watch/" in message.text)
 def manejar_link(message):
-    msg_espera = bot.reply_to(message, "🔗 Link detectado. Agregando...")
+    msg_espera = bot.reply_to(message, "🔗 Link detectado. Agregando a Firebase...")
     try:
         url_directa = message.text.strip()
         catalogo = obtener_catalogo()
-        catalogo.append({
+        
+        nueva_peli = {
             "titulo": "Nueva Película (Editar en Firebase)",
-            "descripcion": "Subido vía Link.",
+            "descripcion": "Agregado vía Link Directo.",
             "urlPortada": "https://i.postimg.cc/sgf0p9Lz/Canal-E.png",
             "urlVideo": url_directa,
             "calidad": "HD",
             "categoria": "Estrenos"
-        })
+        }
+        
+        catalogo.append(nueva_peli)
         if guardar_catalogo(catalogo):
-            bot.edit_message_text(f"✅ ¡Link guardado!\nTotal: {len(catalogo)}", message.chat.id, msg_espera.message_id)
+            bot.edit_message_text(f"✅ ¡Link guardado!\nTotal: {len(catalogo)}\n\n*Nota:* Edita el título y portada en la web de Firebase.", message.chat.id, msg_espera.message_id)
         else:
-            bot.edit_message_text("❌ Error Firebase.", message.chat.id, msg_espera.message_id)
+            bot.edit_message_text("❌ Error al guardar en Firebase.", message.chat.id, msg_espera.message_id)
     except Exception as e:
         bot.edit_message_text(f"❌ Error: {str(e)}", message.chat.id, msg_espera.message_id)
 
+# Manejador de Archivos Directos (Videos cortos)
 @bot.message_handler(content_types=['video', 'document'])
 def manejar_archivo(message):
-    msg_espera = bot.reply_to(message, "🚀 Procesando...")
+    msg_espera = bot.reply_to(message, "🚀 Procesando archivo...")
     try:
         file_id = message.video.file_id if message.content_type == 'video' else message.document.file_id
         file_name = (message.video.file_name if message.content_type == 'video' else message.document.file_name) or "video.mp4"
+        
+        # Link que pasará por el puente /watch/
         direct_url = f"{URL_BASE}/watch/{file_id}"
         titulo_limpio = file_name.split('.')[0].replace("_", " ").capitalize()
+
         catalogo = obtener_catalogo()
         catalogo.append({
-            "titulo": titulo_limpio, "descripcion": "Video corto.", "urlPortada": "https://i.postimg.cc/sgf0p9Lz/Canal-E.png",
-            "urlVideo": direct_url, "calidad": "HD", "categoria": "Estrenos"
+            "titulo": titulo_limpio,
+            "descripcion": "Video corto enviado directamente.",
+            "urlPortada": "https://i.postimg.cc/sgf0p9Lz/Canal-E.png",
+            "urlVideo": direct_url,
+            "calidad": "HD",
+            "categoria": "Estrenos"
         })
-        guardar_catalogo(catalogo)
-        bot.edit_message_text(f"✅ ¡Video guardado!", message.chat.id, msg_espera.message_id)
+
+        if guardar_catalogo(catalogo):
+            bot.edit_message_text(f"✅ ¡Video guardado!\n🎬 {titulo_limpio}", message.chat.id, msg_espera.message_id)
+        else:
+            bot.edit_message_text("❌ Error al escribir en Firebase.", message.chat.id, msg_espera.message_id)
     except Exception as e:
-        bot.edit_message_text(f"❌ Error: {str(e)}", message.chat.id, msg_espera.message_id)
+        bot.edit_message_text(f"❌ Error crítico: {str(e)}", message.chat.id, msg_espera.message_id)
 
 def run_flask(): 
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
 if __name__ == "__main__":
+    # Hilo para Flask (Web y Descargas)
     Thread(target=run_flask).start()
+    # Polling del Bot de Telegram
+    print("Servidor SunTV ONLINE")
     bot.infinity_polling()
 
