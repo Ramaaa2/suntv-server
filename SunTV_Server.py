@@ -2,104 +2,92 @@ import telebot
 import requests
 import json
 import io
-import random
+import os
 from flask import Flask
 from threading import Thread
 
 # --- CONFIGURACIÓN ---
 TOKEN = "8756442233:AAGiQseBVPNjv9qTJyBQVdmAQZVYG8gf870"
-NPOINT_ID = "f3098e77b66eb5a7d32c"
+NPOINT_ID = "78c73ead7cd12e9ce032" # TU ID DE NPOINT DE PELICULAS
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
 @app.route('/')
-def home(): return "Bot SunTV Activo"
+def home(): return "Servidor SunTV Películas Activo"
 
-def run_flask(): app.run(host='0.0.0.0', port=10000)
+def run_flask(): 
+    # Render usa el puerto que le asigne la variable de entorno PORT
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
 
-def limpiar_titulo(texto):
-    limpio = texto.replace(".mp4", "").replace(".mkv", "").replace(".", " ").replace("_", " ")
-    palabras = ["720p", "1080p", "Dual", "Latino", "cinecalidad", "h264", "x264", "bluray", "unrated", "hd", "fullhd", "brrip", "web-dl"]
-    for p in palabras:
-        limpio = limpio.replace(p, "").replace(p.upper(), "").replace(p.capitalize(), "")
-    return limpio.strip().capitalize()
+# Función para obtener la lista actual de nPoint
+def obtener_catalogo():
+    try:
+        res = requests.get(f"https://api.npoint.io/{NPOINT_ID}")
+        data = res.json()
+        return data if isinstance(data, list) else []
+    except:
+        return []
 
-@bot.message_handler(commands=['actualizar'])
-def actualizar_peliculas(message):
-    bot.reply_to(message, "🧨 Iniciando Búsqueda Profunda... Analizando cientos de archivos HD.")
+# Función para subir al nPoint
+def guardar_catalogo(lista):
+    requests.post(f"https://api.npoint.io/{NPOINT_ID}", json=lista)
+
+@bot.message_handler(commands=['start'])
+def enviar_bienvenida(message):
+    bot.reply_to(message, "🎬 **Bienvenido al Servidor de SunTV**\n\nEnviame un archivo de video (.mp4) y yo lo agregaré automáticamente al catálogo de la App.")
+
+# MANEJADOR DE VIDEOS Y DOCUMENTOS
+@bot.message_handler(content_types=['video', 'document'])
+def manejar_archivo(message):
+    msg_espera = bot.reply_to(message, "⏳ Procesando video... por favor espera.")
     
     try:
-        lista_actual = requests.get(f"https://api.npoint.io/{NPOINT_ID}").json()
-        if not isinstance(lista_actual, list): lista_actual = []
-    except:
-        lista_actual = []
-    
-    titulos_viejos = [p['titulo'].lower()[:10] for p in lista_actual] # Comparamos solo los primeros 10 caracteres
-    
-    # ESTRATEGIA: Varias búsquedas simultáneas para encontrar variedad
-    queries = [
-        'subject:"peliculas latino" AND format:MPEG4',
-        'subject:"cine latino" AND format:MPEG4',
-        'title:"latino" AND format:MPEG4 AND item_size:[500000000 TO 5000000000]'
-    ]
-    
-    nuevas_encontradas = []
-    
-    for q in queries:
-        if len(nuevas_encontradas) >= 40: break # Frenamos cuando tengamos suficientes
-        
-        # Pedimos una página aleatoria para no traer siempre lo mismo
-        pagina = random.randint(1, 5)
-        url_search = f"https://archive.org/advancedsearch.php?q={q}&fl[]=identifier,title&sort[]=addeddate+desc&rows=150&page={pagina}&output=json"
-        
-        try:
-            data = requests.get(url_search).json()
-            items = data['response']['docs']
-            
-            for item in items:
-                if len(nuevas_encontradas) >= 40: break
-                
-                titulo_raw = item['title']
-                identificador = item['identifier']
-                titulo_limpio = limpiar_titulo(titulo_raw)
+        # 1. Obtener datos del archivo
+        if message.content_type == 'video':
+            file_id = message.video.file_id
+            file_name = message.video.file_name or f"Pelicula_{message.video.file_unique_id}.mp4"
+        else:
+            file_id = message.document.file_id
+            file_name = message.document.file_name
 
-                # Si el inicio del título no está en la lista vieja, lo agregamos
-                if titulo_limpio.lower()[:10] not in titulos_viejos:
-                    url_video = f"https://archive.org/download/{identificador}/{identificador}.mp4"
-                    
-                    nueva_peli = {
-                        "titulo": titulo_limpio,
-                        "urlPortada": "https://via.placeholder.com/500x750.png?text=SunTV+Pelicula",
-                        "urlVideo": url_video,
-                        "calidad": "HD",
-                        "categoria": "Peliculas"
-                    }
-                    nuevas_encontradas.append(nueva_peli)
-                    lista_actual.append(nueva_peli)
-                    titulos_viejos.append(titulo_limpio.lower()[:10])
-        except:
-            continue
+        # 2. Obtener el link de descarga directa de Telegram
+        # NOTA: Los links de Telegram duran 1 hora. 
+        # Para que sean permanentes, lo ideal es usar un servidor intermedio como File.io o similar.
+        file_info = bot.get_file(file_id)
+        # Este link es el que usaremos (requiere que el bot esté activo para servirlo)
+        direct_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_info.file_path}"
 
-    if nuevas_encontradas:
-        # Subir a nPoint
-        requests.post(f"https://api.npoint.io/{NPOINT_ID}", json=lista_actual)
+        # 3. Limpiar título
+        titulo_final = file_name.replace(".mp4", "").replace(".mkv", "").replace("_", " ").capitalize()
+
+        # 4. Actualizar nPoint
+        catalogo = obtener_catalogo()
         
-        # Mandar el JSON completo al chat
-        json_str = json.dumps(lista_actual, indent=2, ensure_ascii=False)
-        json_file = io.BytesIO(json_str.encode())
-        json_file.name = "catalogo_suntv.json"
+        nueva_entrada = {
+            "titulo": titulo_final,
+            "descripcion": "Subido mediante SunTV Server Bot.",
+            "urlPortada": "https://i.postimg.cc/sgf0p9Lz/Canal-E.png", # Foto por defecto
+            "urlVideo": direct_url,
+            "calidad": "HD",
+            "categoria": "Estrenos"
+        }
         
-        bot.send_document(message.chat.id, json_file, caption=f"✅ ¡Encontré {len(nuevas_encontradas)} pelis nuevas!\n📂 Total ahora: {len(lista_actual)}")
-    else:
-        bot.reply_to(message, "⚠️ Intenté buscar en varias páginas pero no hay nada nuevo en este momento. Probá de nuevo en un rato.")
+        catalogo.append(nueva_entrada)
+        guardar_catalogo(catalogo)
+        
+        bot.edit_message_text(f"✅ **¡Película agregada!**\n\n🎥 **Título:** {titulo_final}\n📂 Total en App: {len(catalogo)}", 
+                             message.chat.id, msg_espera.message_id, parse_mode="Markdown")
+
+    except Exception as e:
+        bot.edit_message_text(f"❌ Error al procesar: {str(e)}", message.chat.id, msg_espera.message_id)
+
+@bot.message_handler(commands=['ver'])
+def ver_json(message):
+    catalogo = obtener_catalogo()
+    json_str = json.dumps(catalogo, indent=2, ensure_ascii=False)
+    bot.send_document(message.chat.id, io.BytesIO(json_str.encode()), visible_file_name="suntv_pelis.json")
 
 if __name__ == "__main__":
     Thread(target=run_flask).start()
     bot.infinity_polling()
-
-
-
-
-
-
-
