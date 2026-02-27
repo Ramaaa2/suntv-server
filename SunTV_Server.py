@@ -36,9 +36,9 @@ def descargar_app():
     Puedes subir el APK a MediaFire, GitHub o Drive y pegar el link directo aquí.
     """
     # REEMPLAZA ESTE LINK por el link de descarga de tu APK (puedes usar el que te da @DirectLink_Bot para tu APK)
-    LINK_DIRECTO_APK = "TU_LINK_AQUI" 
+    LINK_DIRECTO_APK = "https://dl.springsfern.in/dl/AAAAAeJCAwJFEVJMAAAG9A/DwHzpWgQq_qOxXqoVPHqjtoopDU6ozExBRyRZtNzQtU" 
     
-    if LINK_DIRECTO_APK == "TU_LINK_AQUI":
+    if LINK_DIRECTO_APK == "https://dl.springsfern.in/dl/AAAAAeJCAwJFEVJMAAAG9A/DwHzpWgQq_qOxXqoVPHqjtoopDU6ozExBRyRZtNzQtU":
         return "Error: No has configurado el link del APK en el código.", 400
         
     return redirect(LINK_DIRECTO_APK)
@@ -118,3 +118,4 @@ def run_flask():
 if __name__ == "__main__":
     Thread(target=run_flask).start()
     bot.infinity_polling()
+
