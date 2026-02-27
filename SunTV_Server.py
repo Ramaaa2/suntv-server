@@ -35,7 +35,7 @@ def descargar_app():
     Redirecciona directamente al link de descarga de tu APK.
     Cuando actualices la App, solo cambia este link de aquí abajo.
     """
-    LINK_DIRECTO_APK = "https://dl.springsfern.in/dl/AAAAAeJCAwJFEVJMAAAG9A/DwHzpWgQq_qOxXqoVPHqjtoopDU6ozExBRyRZtNzQtU"
+    LINK_DIRECTO_APK = "https://dl.springsfern.in/dl/AAAAAeJCAwJFEVJMAAAG-Q/Eh1tnarfB6Wsr51Dn-sqxgkuNDb1juEYcbmD1oPIjb8"
     return redirect(LINK_DIRECTO_APK)
 
 # --- FUNCIONES FIREBASE ---
@@ -139,4 +139,5 @@ if __name__ == "__main__":
     # Polling del Bot de Telegram
     print("Servidor SunTV ONLINE")
     bot.infinity_polling()
+
 
