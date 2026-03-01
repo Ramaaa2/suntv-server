@@ -1,15 +1,29 @@
 import telebot
-import requests
 import json
 import io
 import os
 from flask import Flask, redirect, Response
 from threading import Thread
 
+# Librerías de administrador de Firebase
+import firebase_admin
+from firebase_admin import credentials, db
+
 # --- CONFIGURACIÓN ---
 TOKEN = os.environ.get("BOT_TOKEN", "8756442233:AAFG959KZpb-JXmtbp3Hhx1PLkLft5jsy2k")
 FIREBASE_URL = os.environ.get("FIREBASE_URL", "https://suntv-app-33e92-default-rtdb.firebaseio.com/").strip("/")
 URL_BASE = os.environ.get("URL", "").strip("/")
+
+# --- CONEXIÓN VIP A FIREBASE ---
+try:
+    # Le decimos al bot que use la llave maestra que descargaste
+    cred = credentials.Certificate("firebase-key.json")
+    firebase_admin.initialize_app(cred, {
+        'databaseURL': FIREBASE_URL
+    })
+    print("✅ Conectado a Firebase como Administrador.")
+except Exception as e:
+    print(f"❌ Error crítico: No se encontró 'firebase-key.json' o es inválido. Error: {e}")
 
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
@@ -31,37 +45,30 @@ def stream_video(file_id):
 # --- FUNCIÓN: DESCARGAR APK ---
 @app.route('/descargar')
 def descargar_app():
-    """
-    Redirecciona directamente al link de descarga de tu APK.
-    Cuando actualices la App, solo cambia este link de aquí abajo.
-    """
     LINK_DIRECTO_APK = "https://dl.springsfern.in/dl/AAAAAeJCAwJFEVJMAAAHMA/DMjkHL8mwTJ0d92SwW28VgkxZn7dzsHMTgDIRSsXp2k"
     return redirect(LINK_DIRECTO_APK)
 
-# --- FUNCIONES FIREBASE ---
-
+# --- FUNCIONES FIREBASE CON LLAVE MAESTRA ---
 def obtener_catalogo():
     try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        res = requests.get(f"{FIREBASE_URL}/peliculas.json", headers=headers, timeout=10)
-        if res.status_code == 200:
-            data = res.json()
-            if data is None: return []
-            return data if isinstance(data, list) else []
-        return []
+        ref = db.reference('peliculas')
+        data = ref.get()
+        if data is None: return []
+        return data if isinstance(data, list) else []
     except Exception as e:
         print(f"Error obteniendo Firebase: {e}")
         return []
 
 def guardar_catalogo(lista):
     try:
-        res = requests.put(f"{FIREBASE_URL}/peliculas.json", json=lista, timeout=10)
-        return res.status_code == 200
+        ref = db.reference('peliculas')
+        ref.set(lista)
+        return True
     except Exception as e:
         print(f"Error guardando en Firebase: {e}")
         return False
 
-# --- MANEJADORES DEL BOT ---
+# --- MANEJADORES DEL BOT DE TELEGRAM ---
 
 @bot.message_handler(commands=['start'])
 def enviar_bienvenida(message):
@@ -75,7 +82,7 @@ def ver_json(message):
     json_str = json.dumps(catalogo, indent=2, ensure_ascii=False)
     bot.send_document(message.chat.id, io.BytesIO(json_str.encode()), visible_file_name="suntv_firebase.json", caption=f"📂 Películas en Firebase: {len(catalogo)}")
 
-# Manejador de Links (Películas grandes o Links externos)
+# Manejador de Links
 @bot.message_handler(func=lambda message: message.text and message.text.startswith("http") and not "/watch/" in message.text)
 def manejar_link(message):
     msg_espera = bot.reply_to(message, "🔗 Link detectado. Agregando a Firebase...")
@@ -100,7 +107,7 @@ def manejar_link(message):
     except Exception as e:
         bot.edit_message_text(f"❌ Error: {str(e)}", message.chat.id, msg_espera.message_id)
 
-# Manejador de Archivos Directos (Videos cortos)
+# Manejador de Archivos Directos (Videos)
 @bot.message_handler(content_types=['video', 'document'])
 def manejar_archivo(message):
     msg_espera = bot.reply_to(message, "🚀 Procesando archivo...")
@@ -108,7 +115,6 @@ def manejar_archivo(message):
         file_id = message.video.file_id if message.content_type == 'video' else message.document.file_id
         file_name = (message.video.file_name if message.content_type == 'video' else message.document.file_name) or "video.mp4"
         
-        # Link que pasará por el puente /watch/
         direct_url = f"{URL_BASE}/watch/{file_id}"
         titulo_limpio = file_name.split('.')[0].replace("_", " ").capitalize()
 
@@ -134,11 +140,10 @@ def run_flask():
     app.run(host='0.0.0.0', port=port)
 
 if __name__ == "__main__":
-    # Hilo para Flask (Web y Descargas)
     Thread(target=run_flask).start()
-    # Polling del Bot de Telegram
     print("Servidor SunTV ONLINE")
     bot.infinity_polling()
+
 
 
 
