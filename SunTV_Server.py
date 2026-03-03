@@ -11,7 +11,7 @@ from firebase_admin import credentials, db, auth
 from datetime import datetime, timedelta
 
 # --- CONFIGURACIÓN ---
-TOKEN = os.environ.get('TOKEN', 'TU_TOKEN_AQUI')
+TOKEN = os.environ.get('TOKEN')
 TMDB_API_KEY = os.environ.get('TMDB_API_KEY', 'TU_TMDB_KEY_AQUI')
 FIREBASE_URL = os.environ.get('FIREBASE_URL', 'TU_URL_FIREBASE_AQUI')
 ADMIN_IDS = [8090944258] 
@@ -177,6 +177,7 @@ if __name__ == "__main__":
     Thread(target=run_flask).start()
     print("🤖 Bot iniciado...")
     bot.infinity_polling(skip_pending=True)
+
 
 
 
