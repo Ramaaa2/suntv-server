@@ -1,156 +1,182 @@
 import telebot
 import json
-import io
 import os
-from flask import Flask, redirect, Response, make_response
+import requests
+import random
+import string
+from flask import Flask, redirect
 from threading import Thread
-
-# Librerías de administrador de Firebase
 import firebase_admin
-from firebase_admin import credentials, db
+from firebase_admin import credentials, db, auth
+from datetime import datetime, timedelta
 
 # --- CONFIGURACIÓN ---
-TOKEN = os.environ.get("BOT_TOKEN", "8756442233:AAFG959KZpb-JXmtbp3Hhx1PLkLft5jsy2k")
-FIREBASE_URL = os.environ.get("FIREBASE_URL", "https://suntv-app-33e92-default-rtdb.firebaseio.com/").strip("/")
-URL_BASE = os.environ.get("URL", "").strip("/")
+TOKEN = os.environ.get('TOKEN', 'TU_TOKEN_AQUI')
+TMDB_API_KEY = os.environ.get('TMDB_API_KEY', 'TU_TMDB_KEY_AQUI')
+FIREBASE_URL = os.environ.get('FIREBASE_URL', 'TU_URL_FIREBASE_AQUI')
+ADMIN_IDS = [8090944258] 
 
-# --- CONEXIÓN VIP A FIREBASE ---
+# --- CONEXIÓN FIREBASE SEGURA ---
 try:
     if not firebase_admin._apps:
-        cred = credentials.Certificate("firebase-key.json")
-        firebase_admin.initialize_app(cred, {
-            'databaseURL': FIREBASE_URL
-        })
-    print("✅ Conectado a Firebase como Administrador.")
+        # Intenta leer desde variable de entorno (Render) o archivo local (PC)
+        firebase_config = os.environ.get('FIREBASE_CONFIG')
+        if firebase_config:
+            cred = credentials.Certificate(json.loads(firebase_config))
+        else:
+            cred = credentials.Certificate("firebase-key.json")
+        
+        firebase_admin.initialize_app(cred, {'databaseURL': FIREBASE_URL})
+    print("✅ Firebase Conectado")
 except Exception as e:
-    print(f"❌ Error crítico de Firebase: {e}")
+    print(f"❌ Error Firebase: {e}")
 
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
 @app.route('/')
-def home(): 
-    return "SunTV Firebase Server - ONLINE"
+def home(): return "SunTV Server Online"
 
-# --- PUENTE DE STREAMING ---
 @app.route('/watch/<file_id>')
 def stream_video(file_id):
     try:
         file_info = bot.get_file(file_id)
-        telegram_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_info.file_path}"
-        return redirect(telegram_url)
-    except Exception as e:
-        return f"Error de streaming: {str(e)}", 404
+        return redirect(f"https://api.telegram.org/file/bot{TOKEN}/{file_info.file_path}")
+    except: return "Error", 404
 
-# --- FUNCIÓN: DESCARGAR APK (CON ANTI-CACHÉ FORZADO) ---
-@app.route('/descargar')
-def descargar_app():
-    """
-    Redirecciona al link de GitHub v2.0 forzando la descarga fresca.
-    """
-    # Agregamos '?v=2' al final para que GitHub y los navegadores crean que es un archivo nuevo
-    LINK_DIRECTO_APK = "https://github.com/Ramaaa2/suntv-server/releases/download/v2.0/app-debug.apk?v=2"
+# --- GESTIÓN DE USUARIOS ---
+
+@bot.message_handler(commands=['buscar'])
+def buscar_usuario(message):
+    if message.from_user.id not in ADMIN_IDS: return
+    try:
+        query = message.text.split()[1].lower()
+        usuarios = db.reference('Usuarios').get()
+        if not usuarios: return bot.reply_to(message, "No hay usuarios registrados.")
+        
+        encontrados = ""
+        for uid, info in usuarios.items():
+            email = info.get('email', '').lower()
+            cel = info.get('celular', '')
+            if query in email or query in cel:
+                estado = "✅" if info.get('estado') == "ACTIVO" else "🚫"
+                encontrados += f"{estado} `{email}`\nID: `{uid}`\nCel: {cel}\n\n"
+        
+        bot.reply_to(message, encontrados if encontrados else "❌ No hay coincidencias.", parse_mode="Markdown")
+    except: bot.reply_to(message, "❌ Uso: /buscar [email o celular]")
+
+@bot.message_handler(commands=['vender'])
+def vender(message):
+    if message.from_user.id not in ADMIN_IDS: return
+    try:
+        args = message.text.split()
+        email, celular = args[1], args[2]
+        password = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+        user = auth.create_user(email=email, password=password)
+        vencimiento = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
+        
+        db.reference(f'Usuarios/{user.uid}').set({
+            'email': email, 'celular': celular, 'estado': 'ACTIVO',
+            'vencimiento': vencimiento, 'pantallas_max': 1
+        })
+        bot.reply_to(message, f"✅ **VENTA EXITOSA**\n\n📧 User: `{email}`\n🔑 Pass: `{password}`\n📅 Vence: {vencimiento}", parse_mode="Markdown")
+    except Exception as e: bot.reply_to(message, f"❌ Error: {e}")
+
+@bot.message_handler(commands=['apagar', 'encender'])
+def cambiar_estado(message):
+    if message.from_user.id not in ADMIN_IDS: return
+    try:
+        cmd = message.text.split()[0]
+        uid = message.text.split()[1]
+        nuevo_estado = "IMPAGO" if "apagar" in cmd else "ACTIVO"
+        db.reference(f'Usuarios/{uid}').update({'estado': nuevo_estado})
+        bot.reply_to(message, f"✅ Usuario {uid} cambiado a {nuevo_estado}")
+    except: bot.reply_to(message, "❌ Uso: /apagar o /encender [UID]")
+
+# --- CARGA DE PELIS Y SERIES ---
+
+@bot.message_handler(func=lambda m: m.from_user.id in ADMIN_IDS and m.text.startswith("http"))
+def detectar_link(message):
+    url = message.text.strip()
+    markup = telebot.types.InlineKeyboardMarkup()
+    markup.add(
+        telebot.types.InlineKeyboardButton("🎬 PELÍCULA", callback_data=f"t_Peli|{url}"),
+        telebot.types.InlineKeyboardButton("📺 SERIE", callback_data=f"t_Serie|{url}")
+    )
+    bot.reply_to(message, "¿Qué estás subiendo?", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("t_"))
+def procesar_tipo(call):
+    tipo, url = call.data.replace("t_", "").split("|")
+    msg = bot.send_message(call.message.chat.id, f"📝 Escribí el nombre (Ej: Los Simpson - 35x01):")
+    bot.register_next_step_handler(msg, lambda m: guardar_en_firebase(m, url, tipo))
+
+def guardar_en_firebase(message, url, tipo):
+    nombre_full = message.text
+    # Limpiamos el nombre para buscar en TMDB (sacamos el "1x01" etc)
+    nombre_busqueda = nombre_full.split("-")[0].strip() if "-" in nombre_full else nombre_full
     
-    # Creamos una respuesta que prohíbe guardar el link en caché
-    response = make_response(redirect(LINK_DIRECTO_APK))
-    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-    response.headers['Pragma'] = 'no-cache'
-    response.headers['Expires'] = '0'
-    return response
+    info = obtener_tmdb(nombre_busqueda)
+    cat = "Serie" if tipo == "Serie" else (info['genero'] if info else "General")
 
-# --- FUNCIONES FIREBASE ---
-def obtener_catalogo():
-    try:
+    datos = {
+        "titulo": nombre_full,
+        "descripcion": info['desc'] if info else "Sin descripción.",
+        "urlPortada": info['portada'] if info else "https://i.postimg.cc/sgf0p9Lz/Canal-E.png",
+        "urlVideo": url,
+        "calidad": "HD",
+        "categoria": cat
+    }
+
+    if tipo == "Serie":
+        # Guardar en series/Nombre_Serie/capitulos
+        nombre_carpeta = nombre_busqueda.replace(" ", "_")
+        db.reference(f'series/{nombre_carpeta}/capitulos').push(datos)
+    else:
+        # Guardar en peliculas
         ref = db.reference('peliculas')
-        data = ref.get()
-        if data is None: return []
-        if isinstance(data, dict):
-            return list(data.values())
-        return data if isinstance(data, list) else []
-    except Exception as e:
-        print(f"Error obteniendo Firebase: {e}")
-        return []
+        actuales = ref.get() or []
+        if isinstance(actuales, dict): actuales = list(actuales.values())
+        actuales.append(datos)
+        ref.set(actuales)
 
-def guardar_catalogo(lista):
+    bot.send_message(message.chat.id, f"✅ {tipo} guardada: {nombre_full}")
+
+def obtener_tmdb(nombre):
+    url = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&query={nombre}&language=es-ES"
     try:
-        ref = db.reference('peliculas')
-        ref.set(lista)
-        return True
-    except Exception as e:
-        print(f"Error guardando en Firebase: {e}")
-        return False
+        r = requests.get(url).json()
+        if r['results']:
+            m = r['results'][0]
+            return {
+                "desc": m.get('overview', 'Sin descripción'),
+                "portada": f"https://image.tmdb.org/t/p/w500{m.get('poster_path')}",
+                "genero": "Acción" # Simplificado
+            }
+    except: return None
 
-# --- MANEJADORES DEL BOT ---
+# --- COMANDOS EXTRAS ---
+@bot.message_handler(commands=['usuarios'])
+def lista_usuarios(message):
+    if message.from_user.id not in ADMIN_IDS: return
+    users = db.reference('Usuarios').get()
+    if not users: return bot.reply_to(message, "Sin usuarios.")
+    txt = "👥 **LISTA DE CLIENTES:**\n\n"
+    for uid, info in users.items():
+        txt += f"• `{info.get('email')}` | ID: `{uid}`\n"
+    bot.reply_to(message, txt, parse_mode="Markdown")
 
 @bot.message_handler(commands=['start'])
-def enviar_bienvenida(message):
-    bot.reply_to(message, "🎬 **SunTV Admin Bot v2.0**\n\n"
-                          "• Envía un link para agregar peli.\n"
-                          "• /ver - Descarga el JSON.\n"
-                          "• /descargar - Link de la APK nueva.")
+def start(message):
+    bot.reply_to(message, "🎥 **SunTV Admin**\n\nEnvía un link para empezar.\nUsa `/buscar` para gestionar clientes.")
 
-@bot.message_handler(commands=['ver'])
-def ver_json(message):
-    catalogo = obtener_catalogo()
-    json_str = json.dumps(catalogo, indent=2, ensure_ascii=False)
-    bot.send_document(message.chat.id, io.BytesIO(json_str.encode()), 
-                     visible_file_name="suntv_firebase.json", 
-                     caption=f"📂 Películas en Firebase: {len(catalogo)}")
-
-@bot.message_handler(commands=['descargar'])
-def link_descarga(message):
-    bot.reply_to(message, "🚀 **Descarga SunTV v2.0 (Forzada):**\nhttps://github.com/Ramaaa2/suntv-server/releases/download/v2.0/app-debug.apk")
-
-@bot.message_handler(func=lambda message: message.text and message.text.startswith("http") and not "/watch/" in message.text)
-def manejar_link(message):
-    msg_espera = bot.reply_to(message, "🔗 Agregando a Firebase...")
-    try:
-        url_directa = message.text.strip()
-        catalogo = obtener_catalogo()
-        catalogo.append({
-            "titulo": "Nueva Película",
-            "descripcion": "Agregado vía Bot.",
-            "urlPortada": "https://i.postimg.cc/sgf0p9Lz/Canal-E.png",
-            "urlVideo": url_directa,
-            "calidad": "HD",
-            "categoria": "Estrenos"
-        })
-        if guardar_catalogo(catalogo):
-            bot.edit_message_text(f"✅ ¡Guardado!\nTotal: {len(catalogo)}", message.chat.id, msg_espera.message_id)
-        else:
-            bot.edit_message_text("❌ Error en Firebase.", message.chat.id, msg_espera.message_id)
-    except Exception as e:
-        bot.edit_message_text(f"❌ Error: {str(e)}", message.chat.id, msg_espera.message_id)
-
-@bot.message_handler(content_types=['video', 'document'])
-def manejar_archivo(message):
-    msg_espera = bot.reply_to(message, "🚀 Procesando video...")
-    try:
-        file_id = message.video.file_id if message.content_type == 'video' else message.document.file_id
-        file_name = (message.video.file_name if message.content_type == 'video' else message.document.file_name) or "video.mp4"
-        direct_url = f"{URL_BASE}/watch/{file_id}"
-        titulo_limpio = file_name.split('.')[0].replace("_", " ").capitalize()
-        catalogo = obtener_catalogo()
-        catalogo.append({
-            "titulo": titulo_limpio,
-            "urlVideo": direct_url,
-            "urlPortada": "https://i.postimg.cc/sgf0p9Lz/Canal-E.png",
-            "calidad": "HD",
-            "categoria": "Telegram"
-        })
-        if guardar_catalogo(catalogo):
-            bot.edit_message_text(f"✅ ¡Video guardado!\n🎬 {titulo_limpio}", message.chat.id, msg_espera.message_id)
-    except Exception as e:
-        bot.edit_message_text(f"❌ Error: {str(e)}", message.chat.id, msg_espera.message_id)
-
-def run_flask(): 
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+def run_flask():
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
 
 if __name__ == "__main__":
     Thread(target=run_flask).start()
-    bot.infinity_polling()
-
+    print("🤖 Bot iniciado...")
+    bot.infinity_polling(skip_pending=True)
 
 
 
