@@ -4,6 +4,7 @@ import json
 import random
 import string
 import requests
+import time
 from flask import Flask, redirect
 from threading import Thread
 import firebase_admin
@@ -11,6 +12,7 @@ from firebase_admin import credentials, db, auth
 from datetime import datetime, timedelta
 
 # --- CONFIGURACIÓN DE RENDER Y VARIABLES GLOBALES ---
+# Usamos os.environ para que tus llaves no queden expuestas en el historial de GitHub
 TOKEN = os.environ.get('TOKEN', '8685460740:AAEFnbdbd7T0VTARP8f5Y3X1zF4_jtAqpDQ') 
 FIREBASE_URL = os.environ.get('FIREBASE_URL', 'https://suntv-app-33e92-default-rtdb.firebaseio.com/')
 TMDB_API_KEY = os.environ.get('TMDB_API_KEY', 'f89f1b10ba76c14e544f07a1473f7d08')
@@ -27,27 +29,29 @@ GENEROS_TMDB = {
     10759: "Acción y Aventura", 10762: "Infantil", 10765: "Sci-Fi & Fantasía", 10768: "Guerra y Política"
 }
 
-# --- CONEXIÓN FIREBASE (Híbrida: Nube o Local) ---
+# --- CONEXIÓN FIREBASE ---
 try:
     firebase_config = os.environ.get('FIREBASE_CONFIG')
     if not firebase_admin._apps:
         if firebase_config:
+            # Si estás en Render, cargamos el JSON desde la variable de entorno
             cred_dict = json.loads(firebase_config)
             cred = credentials.Certificate(cred_dict)
         else:
+            # Si estás local, busca el archivo físico
             cred = credentials.Certificate("firebase-key.json")
         firebase_admin.initialize_app(cred, {'databaseURL': FIREBASE_URL})
-    print("✅ Firebase Conectado (Nube/Local)")
+    print("✅ Firebase Conectado con éxito")
 except Exception as e:
     print(f"❌ Error al conectar Firebase: {e}")
 
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
-# --- RUTAS WEB (Mantiene la App viva y hace el streaming) ---
+# --- RUTAS WEB ---
 @app.route('/')
 def home():
-    return "<h1>SunTV Server Online</h1><p>El servidor principal y el motor de streaming están funcionando al 100%.</p>"
+    return "<h1>SunTV Server Online</h1><p>Vigilante de Peticiones y API de carga activos.</p>"
 
 @app.route('/watch/<file_id>')
 def stream_video(file_id):
@@ -59,26 +63,40 @@ def stream_video(file_id):
 
 # --- VIGILANTE DE PEDIDOS DE PELÍCULAS ---
 def escuchar_peticiones(event):
-    if event.data and isinstance(event.data, dict):
-        if event.path != '/':
-            datos = event.data
-            pedido = datos.get('pedido', 'Desconocido')
-            usuario = datos.get('usuario', 'Desconocido')
-            
-            mensaje = f"🍿 **¡NUEVO PEDIDO DE PELÍCULA!** 🍿\n👤 **Usuario:** `{usuario}`\n🎬 **Quiere ver:** {pedido}"
-            bot.send_message(ADMIN_IDS[0], mensaje, parse_mode="Markdown")
-            
-            # Limpia la base de datos
-            db.reference(f'Peticiones{event.path}').delete()
+    try:
+        if event.data and isinstance(event.data, dict):
+            # Caso 1: Un solo pedido nuevo
+            if event.path != '/':
+                key = event.path.replace('/', '')
+                procesar_peticion(key, event.data)
+            # Caso 2: Carga inicial con múltiples pedidos
+            else:
+                for key, datos in event.data.items():
+                    procesar_peticion(key, datos)
+    except Exception as e:
+        print(f"Error en el vigilante: {e}")
 
-# --- GESTIÓN DE USUARIOS ---
+def procesar_peticion(key, datos):
+    if not isinstance(datos, dict): return
+    pedido = datos.get('pedido', 'Desconocido')
+    usuario = datos.get('usuario', 'Desconocido')
+    
+    mensaje = f"🍿 **¡NUEVO PEDIDO DE PELÍCULA!** 🍿\n━━━━━━━━━━━━━━━━━━━━\n👤 **Usuario:** `{usuario}`\n🎬 **Quiere ver:** {pedido}"
+    
+    try:
+        bot.send_message(ADMIN_IDS[0], mensaje, parse_mode="Markdown")
+        # Borramos el pedido de Firebase para no repetir notificaciones
+        db.reference(f'Peticiones/{key}').delete()
+    except Exception as e:
+        print(f"Error enviando mensaje a Telegram: {e}")
+
+# --- COMANDOS DE GESTIÓN ---
 @bot.message_handler(commands=['vender'])
 def vender(message):
     if message.from_user.id not in ADMIN_IDS: return
     try:
         args = message.text.split()
-        if len(args) < 3: return bot.reply_to(message, "❌ Uso: `/vender [email] [celular] [pantallas]`", parse_mode="Markdown")
-
+        if len(args) < 3: return bot.reply_to(message, "❌ Uso: `/vender [email] [celular] [pantallas]`")
         email, celular = args[1], args[2]
         pantallas = int(args[3]) if len(args) > 3 else 1
         password = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
@@ -93,28 +111,7 @@ def vender(message):
             'sessions': {}
         })
         
-        ticket = (f"✨ **SUNTV - ACTIVACIÓN** ✨\n"
-                  f"📧 User: `{email}`\n🔑 Pass: `{password}`\n"
-                  f"📅 Vence: `{vencimiento_dt.strftime('%d/%m/%Y')}`")
-        bot.reply_to(message, ticket, parse_mode="Markdown")
-    except Exception as e: bot.reply_to(message, f"❌ Error: {e}")
-
-@bot.message_handler(commands=['demo'])
-def crear_demo(message):
-    if message.from_user.id not in ADMIN_IDS: return
-    try:
-        id_demo = random.randint(100, 999)
-        email, password = f"demo{id_demo}@suntv.com", ''.join(random.choices(string.digits, k=6))
-        expiracion_dt = datetime.now() + timedelta(minutes=30)
-        user = auth.create_user(email=email, password=password)
-        
-        db.reference(f'Usuarios/{user.uid}').set({
-            'email': email, 'estado': 'DEMO', 'vencimiento': expiracion_dt.strftime('%Y-%m-%d %H:%M:%S'),
-            'limite_pantallas': 1, 'perfiles': {"perfil_1": {"nombre": "Invitado", "avatar": "https://api.dicebear.com/7.x/bottts/png?seed=Guest&backgroundColor=808080"}},
-            'sessions': {}
-        })
-        ticket = f"🎁 **DEMO 30 MIN**\n📧 `{email}`\n🔑 `{password}`\n⏰ Vence: `{expiracion_dt.strftime('%H:%M')} hs`"
-        bot.reply_to(message, ticket, parse_mode="Markdown")
+        bot.reply_to(message, f"✨ **CUENTA ACTIVADA**\n📧 `{email}`\n🔑 `{password}`\n📅 Vence: {vencimiento_dt.strftime('%d/%m/%Y')}", parse_mode="Markdown")
     except Exception as e: bot.reply_to(message, f"❌ Error: {e}")
 
 @bot.message_handler(commands=['buscar'])
@@ -123,45 +120,29 @@ def buscar_usuario(message):
     try:
         query = message.text.split()[1].lower()
         usuarios = db.reference('Usuarios').get()
-        if not usuarios: return bot.reply_to(message, "No hay usuarios.")
-        
+        if not usuarios: return bot.reply_to(message, "No hay usuarios registrados.")
         encontrados = ""
         for uid, info in usuarios.items():
-            email = info.get('email', '').lower()
-            cel = info.get('celular', '')
-            if query in email or query in cel:
+            if query in info.get('email', '').lower() or query in info.get('celular', ''):
                 estado = "✅" if info.get('estado') == "ACTIVO" else "🎁" if info.get('estado') == "DEMO" else "🚫"
-                encontrados += f"{estado} `{email}`\nUID: `{uid}`\nCel: {cel}\n\n"
+                encontrados += f"{estado} `{info.get('email')}`\nID: `{uid}`\n\n"
         bot.reply_to(message, encontrados if encontrados else "❌ Sin coincidencias.", parse_mode="Markdown")
-    except: bot.reply_to(message, "❌ Uso: /buscar [email o celular]")
+    except: bot.reply_to(message, "❌ Uso: /buscar [email]")
 
-@bot.message_handler(commands=['apagar', 'encender'])
-def cambiar_estado(message):
-    if message.from_user.id not in ADMIN_IDS: return
-    try:
-        cmd = message.text.split()[0]
-        uid = message.text.split()[1]
-        nuevo_estado = "IMPAGO" if "apagar" in cmd else "ACTIVO"
-        db.reference(f'Usuarios/{uid}').update({'estado': nuevo_estado})
-        bot.reply_to(message, f"✅ Usuario {uid} cambiado a {nuevo_estado}")
-    except: bot.reply_to(message, "❌ Uso: /apagar o /encender [UID]")
-
-# --- SISTEMA DE CARGA DE CONTENIDO CON TMDB Y SAGAS ---
+# --- SISTEMA DE CARGA TMDB ---
 @bot.message_handler(func=lambda m: m.text and m.text.startswith("http") and "dicebear" not in m.text)
 def detectar_link(message):
     if message.from_user.id not in ADMIN_IDS: return
     user_links[message.from_user.id] = message.text.strip()
     markup = telebot.types.InlineKeyboardMarkup()
-    markup.add(
-        telebot.types.InlineKeyboardButton("🎬 PELÍCULA", callback_data="tipo_Peli"),
-        telebot.types.InlineKeyboardButton("📺 SERIE", callback_data="tipo_Serie")
-    )
+    markup.add(telebot.types.InlineKeyboardButton("🎬 PELÍCULA", callback_data="tipo_Peli"),
+               telebot.types.InlineKeyboardButton("📺 SERIE", callback_data="tipo_Serie"))
     bot.reply_to(message, "¡Link detectado! ¿Qué quieres subir?", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("tipo_"))
 def procesar_tipo(call):
     tipo = call.data.replace("tipo_", "")
-    msg = bot.send_message(call.message.chat.id, f"📝 Escribí el nombre (Ej: Batman 2026):")
+    msg = bot.send_message(call.message.chat.id, "📝 Escribí el nombre (Ej: Batman 2026):")
     bot.register_next_step_handler(msg, lambda m: preparar_guardado(m, user_links.get(call.from_user.id), tipo))
 
 def obtener_tmdb(nombre):
@@ -172,96 +153,71 @@ def obtener_tmdb(nombre):
             m = r['results'][0]
             saga_nombre = ""
             if m.get('media_type') == 'movie' or 'title' in m:
-                movie_id = m.get('id')
-                url_detalle = f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={TMDB_API_KEY}&language=es-ES"
+                url_detalle = f"https://api.themoviedb.org/3/movie/{m.get('id')}?api_key={TMDB_API_KEY}&language=es-ES"
                 det_r = requests.get(url_detalle).json()
                 coleccion = det_r.get('belongs_to_collection')
-                if coleccion and isinstance(coleccion, dict):
-                    saga_nombre = coleccion.get('name', '')
+                if coleccion: saga_nombre = coleccion.get('name', '')
 
             ids = m.get('genre_ids', [])
-            genero_final = ", ".join([GENEROS_TMDB.get(i, "") for i in ids if i in GENEROS_TMDB]) or "General"
-            desc = m.get('overview', '').strip()
-            poster = m.get('poster_path')
-            return {
-                "descripcion": desc if desc else "Sin descripción.",
-                "urlPortada": f"https://image.tmdb.org/t/p/w500{poster}" if poster else "https://i.postimg.cc/sgf0p9Lz/Canal-E.png",
-                "genero": genero_final,
-                "saga": saga_nombre
-            }
+            genero = ", ".join([GENEROS_TMDB.get(i, "") for i in ids if i in GENEROS_TMDB]) or "General"
+            return {"descripcion": m.get('overview', 'Sin desc.'), "urlPortada": f"https://image.tmdb.org/t/p/w500{m.get('poster_path')}",
+                    "genero": genero, "saga": saga_nombre}
     except: pass
     return None
 
 def preparar_guardado(message, url, tipo):
     chat_id = message.chat.id
     nombre_full = message.text
-    nombre_busqueda = nombre_full.split("-")[0].replace("2026", "").strip()
+    nombre_limpio = nombre_full.split("-")[0].replace("2026", "").strip()
+    info = obtener_tmdb(nombre_limpio)
     
-    info = obtener_tmdb(nombre_busqueda)
-    
-    desc_final = info['descripcion'] if info else "Sin descripción."
-    portada_final = info['urlPortada'] if info else "https://i.postimg.cc/sgf0p9Lz/Canal-E.png"
     cat_base = f"Serie, {info['genero']}" if info and tipo == "Serie" else (info['genero'] if info else "General")
-    final_cat = f"2026, {cat_base}" if "2026" in nombre_full else cat_base
-
+    
     datos = {
-        "tipo": tipo, "titulo": nombre_full, "descripcion": desc_final,
-        "urlPortada": portada_final, "urlVideo": url, "calidad": "1080p HD",
-        "categoria": final_cat, "saga": info['saga'] if info and 'saga' in info else "",
-        "nombre_carpeta": nombre_busqueda.replace(" ", "_")
+        "tipo": tipo, "titulo": nombre_full, "descripcion": info['descripcion'] if info else "Sin desc.",
+        "urlPortada": info['urlPortada'] if info else "https://i.postimg.cc/sgf0p9Lz/Canal-E.png",
+        "urlVideo": url, "calidad": "1080p HD", "categoria": f"2026, {cat_base}" if "2026" in nombre_full else cat_base,
+        "saga": info['saga'] if info else "", "nombre_carpeta": nombre_limpio.replace(" ", "_")
     }
     pending_saves[chat_id] = datos
-    mostrar_preview(chat_id)
-
-def mostrar_preview(chat_id):
-    datos = pending_saves.get(chat_id)
-    if not datos: return
-    texto_saga = f"📚 **Saga:** `{datos['saga']}`\n" if datos.get('saga') else ""
-    preview = (f"👀 **VISTA PREVIA** 👀\n\n🎬 **Título:** `{datos['titulo']}`\n{texto_saga}"
-               f"🎞 **Cat:** `{datos['categoria']}`\n📝 **Desc:** {datos['descripcion'][:60]}...\n")
     markup = telebot.types.InlineKeyboardMarkup()
-    markup.add(
-        telebot.types.InlineKeyboardButton("✅ Guardar", callback_data="accion_guardar"),
-        telebot.types.InlineKeyboardButton("❌ Cancelar", callback_data="accion_cancelar")
-    )
-    bot.send_photo(chat_id, datos['urlPortada'], caption=preview, parse_mode="Markdown", reply_markup=markup)
+    markup.add(telebot.types.InlineKeyboardButton("✅ Guardar", callback_data="accion_guardar"),
+               telebot.types.InlineKeyboardButton("❌ Cancelar", callback_data="accion_cancelar"))
+    bot.send_photo(chat_id, datos['urlPortada'], caption=f"🎬 **Confirmar:** {datos['titulo']}\n📚 **Saga:** {datos['saga']}", parse_mode="Markdown", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("accion_"))
 def accion_preview(call):
-    chat_id = call.message.chat.id
-    accion = call.data.replace("accion_", "")
-    if accion == "cancelar":
-        pending_saves.pop(chat_id, None)
-        bot.delete_message(chat_id, call.message.message_id)
-    elif accion == "guardar":
-        datos = pending_saves.pop(chat_id, None)
+    if call.data == "accion_guardar":
+        datos = pending_saves.pop(call.message.chat.id, None)
         if not datos: return
         payload = {k:v for k,v in datos.items() if k not in ['tipo', 'nombre_carpeta']}
         if datos['tipo'] == "Serie":
-            carpeta = datos['nombre_carpeta']
-            db.reference(f"series/{carpeta}/capitulos").push(payload)
-            db.reference(f"series/{carpeta}/info").set({"titulo": carpeta.replace("_", " "), "urlPortada": datos['urlPortada'], "categoria": datos['categoria']})
+            db.reference(f"series/{datos['nombre_carpeta']}/capitulos").push(payload)
+            db.reference(f"series/{datos['nombre_carpeta']}/info").set({"titulo": datos['titulo'].split("-")[0].strip(), "urlPortada": datos['urlPortada'], "categoria": datos['categoria']})
         else:
             ref = db.reference('peliculas')
             actuales = ref.get() or []
             if isinstance(actuales, dict): actuales = list(actuales.values())
             actuales.append(payload)
             ref.set(actuales)
-        bot.edit_message_caption(f"✅ ¡Publicado en Firebase!", chat_id=chat_id, message_id=call.message.message_id)
+        bot.edit_message_caption("✅ ¡Publicado con éxito!", chat_id=call.message.chat.id, message_id=call.message.message_id)
+    else:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
 
 @bot.message_handler(commands=['start'])
-def start(message):
-    bot.reply_to(message, "✅ **SunTV Cloud Bot**\nServidor online y vigilante de Peticiones activo.")
+def start_cmd(message):
+    bot.reply_to(message, "🚀 **SunTV Cloud Bot Online**\nUsa /vender o manda un link para empezar.")
 
-# --- INICIO DEL SERVIDOR ---
+# --- INICIO ---
 def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
 
 if __name__ == "__main__":
-    # Inicia el vigilante de pedidos en la nube
-    Thread(target=lambda: db.reference('Peticiones').listen(escuchar_peticiones)).start()
-    # Inicia el servidor web de Render
+    def iniciar_vigilante():
+        time.sleep(10) # Espera a que Render estabilice la red
+        print("👀 Vigilante encendido...")
+        db.reference('Peticiones').listen(escuchar_peticiones)
+
+    Thread(target=iniciar_vigilante).start()
     Thread(target=run_flask).start()
-    # Inicia el bot de Telegram
     bot.infinity_polling(skip_pending=True)
